@@ -1,15 +1,29 @@
 import torch
 import torch.nn.functional as F
-from torch_scatter import scatter_add
-from torch_geometric.nn.inits import reset
+from torch_geometric.nn.inits import reset 
 
 from conv import GNN_node, GNN_node_Virtualnode
+
+def scatter_add(src, index, dim=0, dim_size=None, out=None): #(the scatter_add function on Torch gave me issues on my M2 mac so i implemented a custon one here !)
+    """Custom implementation of scatter_add using PyTorch's native scatter_add_"""
+    # Determine output shape
+    if out is None:
+        size = list(src.shape)
+        if dim_size is not None:
+            size[dim] = dim_size
+        else:
+            size[dim] = index.max().item() + 1
+        out = torch.zeros(size, dtype=src.dtype, device=src.device)
+    
+    # Use scatter_add_ for in-place accumulation
+    out.scatter_add_(dim, index.unsqueeze(-1).expand_as(src) if src.dim() > 1 else index.unsqueeze(-1), src)
+    return out
 
 nn_act = torch.nn.ReLU()
 F_act = F.relu
 class GraphEnvAug(torch.nn.Module):
 
-    def __init__(self, num_tasks, num_layer = 5, emb_dim = 300, gnn_type = 'gin', drop_ratio = 0.5, gamma = 0.4, use_linear_predictor=False):
+    def __init__(self, num_tasks, num_layer = 5, emb_dim = 300, gnn_type = 'gin', drop_ratio = 0.5, gamma = 0.4, use_linear_predictor=False, atom_encode=True, node_dim=None, edge_dim=None):
         '''
             num_tasks (int): number of labels to be predicted
         '''
@@ -28,12 +42,13 @@ class GraphEnvAug(torch.nn.Module):
         ### GNN to generate node embeddings
         gnn_name = gnn_type.split('-')[0]
         emb_dim_rat = emb_dim
-        if 'virtual' in gnn_type: 
-            rationale_gnn_node = GNN_node_Virtualnode(2, emb_dim_rat, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name)
-            self.graph_encoder = GNN_node_Virtualnode(num_layer, emb_dim, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name)
+        gnn_kwargs = dict(atom_encode=atom_encode, node_dim=node_dim, edge_dim=edge_dim)
+        if 'virtual' in gnn_type:
+            rationale_gnn_node = GNN_node_Virtualnode(2, emb_dim_rat, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name, **gnn_kwargs)
+            self.graph_encoder = GNN_node_Virtualnode(num_layer, emb_dim, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name, **gnn_kwargs)
         else:
-            rationale_gnn_node = GNN_node(2, emb_dim_rat, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name)
-            self.graph_encoder = GNN_node(num_layer, emb_dim, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name)
+            rationale_gnn_node = GNN_node(2, emb_dim_rat, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name, **gnn_kwargs)
+            self.graph_encoder = GNN_node(num_layer, emb_dim, JK = "last", drop_ratio = drop_ratio, residual = True, gnn_name = gnn_name, **gnn_kwargs)
         self.separator = separator(
             rationale_gnn_node=rationale_gnn_node, 
             gate_nn = torch.nn.Sequential(torch.nn.Linear(emb_dim_rat, 2*emb_dim_rat), torch.nn.BatchNorm1d(2*emb_dim_rat), nn_act, torch.nn.Dropout(), torch.nn.Linear(2*emb_dim_rat, 1)),
@@ -61,8 +76,6 @@ class GraphEnvAug(torch.nn.Module):
         h_r, _, _, _ = self.separator(batched_data, h_node)
         pred_rem = self.predictor(h_r)
         return pred_rem 
-
-
 
 
 class separator(torch.nn.Module):

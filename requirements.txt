@@ -1,9 +1,30 @@
-ogb==1.3.2
-tqdm==4.62.3
-torch==1.10.1
-torch_scatter==2.0.9
-torch_geometric==2.0.3
-numpy==1.21.2
-pandas==1.3.5
-rdkit==2009.Q1-1
-scikit_learn==1.0.2
+ogb==1.3.2 # Provides two things in this code:
+#1. atom_to_feature_vector, bond_to_feature_vector  → converts RDKit atoms/bonds to number arrays
+#2. AtomEncoder, BondEncoder                         → learnable embeddings for those features
+#3. Evaluator                                        → computes RMSE/AUC metrics consistently
+tqdm==4.62.3 # for graph in tqdm(graph_list):   shows a loading bar while processing graphs
+torch==1.10.1 
+torch_scatter==2.0.9 # we now have our custom scater function, but this is still required for some of the underlying operations in torch_geometric
+torch_geometric==2.0.3 #Provides:
+#- MessagePassing base class    → GINConv, GCNConv in conv.py
+#- InMemoryDataset              → PolymerRegDataset in dataset.py
+#- DataLoader                   → batching graphs in main_pyg.py
+#- global_mean_pool/add_pool    → graph level pooling in model.py
+#- Data                         → single graph object
+numpy==1.21.2 #Used everywhere for:
+#- Building edge_index, node_feat, edge_feat arrays before converting to tensors
+#- Storing y_true, y_pred during evaluation
+pandas==1.3.5 # data loading and processing
+rdkit==2023.9.1 # edited (was rdkit==2009.Q1-1) 
+# Only used in dataset.py smiles2graph():
+#mol = Chem.MolFromSmiles(smiles_string)  # parse SMILES string
+#mol.GetAtoms()                            # iterate over atoms
+#mol.GetBonds()                            # iterate over bonds
+# converts chemistry into graph structure
+scikit-learn==1.0.2 # used in two places:
+# main_pyg.py
+#train_test_split(full_idx, ...)   # splitting dataset into train/val/test
+
+# utils.py
+#r2_score(y_true, y_pred)          # computing R² metric during eval
+networkx==2.6.3 #added for k-core function in utils.py

@@ -51,8 +51,17 @@ def get_args():
     
     return args
 
-cls_criterion = torch.nn.BCEWithLogitsLoss()
+bce_criterion = torch.nn.BCEWithLogitsLoss()
+ce_criterion = torch.nn.CrossEntropyLoss()
 reg_criterion = torch.nn.MSELoss()
+
+def _get_criterion(args):
+    if 'classification' not in args.task_type:
+        return reg_criterion
+    if args.dataset.startswith('ogbg'):
+        return bce_criterion
+    return ce_criterion
+
 def train(args, model, device, loader, optimizers, task_type, optimizer_name):
     optimizer = optimizers[optimizer_name]
     model.train()
@@ -62,7 +71,10 @@ def train(args, model, device, loader, optimizers, task_type, optimizer_name):
     if optimizer_name == 'separator':
         set_requires_grad([model.separator], requires_grad=True)
         set_requires_grad([model.graph_encoder,model.predictor], requires_grad=False)
-        
+
+    criterion = _get_criterion(args)
+    multiclass = (criterion == ce_criterion)
+
     for step, batch in enumerate(loader):
         batch = batch.to(device)
 
@@ -71,24 +83,29 @@ def train(args, model, device, loader, optimizers, task_type, optimizer_name):
         else:
             optimizer.zero_grad()
             pred = model(batch)
-            if "classification" in task_type:
-                criterion = cls_criterion
-            else:
-                criterion = reg_criterion
 
             if args.dataset.startswith('plym'):
-                if args.plym_prop == 'density': 
+                if args.plym_prop == 'density':
                     batch.y = torch.log(batch[args.plym_prop])
                 else:
                     batch.y = batch[args.plym_prop]
-            target = batch.y.to(torch.float32)
-            is_labeled = batch.y == batch.y
-            loss = criterion(pred['pred_rem'].to(torch.float32)[is_labeled], target[is_labeled]) 
-            target_rep = batch.y.to(torch.float32).repeat_interleave(batch.batch[-1]+1,dim=0)
-            is_labeled_rep = target_rep == target_rep
-            loss += criterion(pred['pred_rep'].to(torch.float32)[is_labeled_rep], target_rep[is_labeled_rep])
 
-            if optimizer_name == 'separator': 
+            if multiclass:
+                target = batch.y.view(-1).long()
+                is_labeled = target >= 0
+                loss = criterion(pred['pred_rem'][is_labeled], target[is_labeled])
+                target_rep = target.repeat_interleave(batch.batch[-1]+1)
+                is_labeled_rep = target_rep >= 0
+                loss += criterion(pred['pred_rep'][is_labeled_rep], target_rep[is_labeled_rep])
+            else:
+                target = batch.y.to(torch.float32)
+                is_labeled = batch.y == batch.y
+                loss = criterion(pred['pred_rem'].to(torch.float32)[is_labeled], target[is_labeled])
+                target_rep = batch.y.to(torch.float32).repeat_interleave(batch.batch[-1]+1,dim=0)
+                is_labeled_rep = target_rep == target_rep
+                loss += criterion(pred['pred_rep'].to(torch.float32)[is_labeled_rep], target_rep[is_labeled_rep])
+
+            if optimizer_name == 'separator':
                 loss += pred['loss_reg']
 
             loss.backward()
@@ -110,21 +127,28 @@ def eval(args, model, device, loader, evaluator):
         else:
             with torch.no_grad():
                 pred = model.eval_forward(batch)
-    
+
             if args.dataset.startswith('plym'):
                 if args.plym_prop == 'density' :
                     batch.y = torch.log(batch[args.plym_prop])
                 else:
                     batch.y = batch[args.plym_prop]
-            y_true.append(batch.y.view(pred.shape).detach().cpu())
+            y_true.append(batch.y.detach().cpu())
             y_pred.append(pred.detach().cpu())
-    y_true = torch.cat(y_true, dim = 0).numpy()
-    y_pred = torch.cat(y_pred, dim = 0).numpy()
-    input_dict = {"y_true": y_true, "y_pred": y_pred}
+    y_true = torch.cat(y_true, dim = 0)
+    y_pred = torch.cat(y_pred, dim = 0)
+
     if args.dataset.startswith('plym'):
-        return [evaluator.eval(input_dict)['rmse'], r2_score(y_true, y_pred)]
+        input_dict = {"y_true": y_true.view(y_pred.shape).numpy(), "y_pred": y_pred.numpy()}
+        return [evaluator.eval(input_dict)['rmse'], r2_score(y_true.numpy(), y_pred.numpy())]
     elif args.dataset.startswith('ogbg'):
+        input_dict = {"y_true": y_true.view(y_pred.shape).numpy(), "y_pred": y_pred.numpy()}
         return [evaluator.eval(input_dict)['rocauc']]
+    else:
+        preds = y_pred.argmax(dim=-1)
+        labels = y_true.view(-1).long()
+        acc = (preds == labels).float().mean().item()
+        return [acc]
 
 
 def init_weights(net, init_type='normal', init_gain=0.02):
