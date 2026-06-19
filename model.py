@@ -28,6 +28,7 @@ class GraphEnvAug(torch.nn.Module):
             num_tasks (int): number of labels to be predicted
         '''
 
+# GraphEnvAug passes atom_encode, node_dim, edge_dim through to all GNN layers now.
         super(GraphEnvAug, self).__init__()
 
         self.num_layer = num_layer
@@ -76,7 +77,6 @@ class GraphEnvAug(torch.nn.Module):
         h_r, _, _, _ = self.separator(batched_data, h_node)
         pred_rem = self.predictor(h_r)
         return pred_rem 
-
 
 class separator(torch.nn.Module):
     def __init__(self, rationale_gnn_node, gate_nn, nn=None):

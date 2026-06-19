@@ -42,7 +42,6 @@ class apply_k_core(): #added (but will we use this?) Simple clustering ? Graph c
     new_edge_index = np.array(new_edges, dtype=np.int64).T if new_edges else np.empty((2,0), dtype=np.int64)
     
     return kept_nodes, new_edge_index, node_map
-
 # SMILES stands for Simplified Molecular Input Line Entry System — it's basically a way to write a 3D molecule as a simple text string.
 # [H]   = hydrogen
 # *     = polymer end point (where chain continues)
@@ -131,7 +130,6 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
         for graph in tqdm(graph_list):
             g = Data()
             g.__num_nodes__ = graph['num_nodes']
-
             g.edge_index = torch.from_numpy(graph['edge_index'])
 
             del graph['num_nodes']

@@ -91,7 +91,6 @@ def train(args, model, device, loader, optimizers, task_type, optimizer_name):
                     batch.y = torch.log(batch[args.plym_prop])
                 else:
                     batch.y = batch[args.plym_prop]
-
             if multiclass:
                 target = batch.y.view(-1).long()
                 is_labeled = target >= 0
@@ -114,7 +113,6 @@ def train(args, model, device, loader, optimizers, task_type, optimizer_name):
             if args.use_clip_norm:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
-
 
 def eval(args, model, device, loader, evaluator):
     model.eval()

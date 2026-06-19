@@ -11,6 +11,8 @@ import math
 
 nn_act = torch.nn.ReLU() #ReLU()
 F_act = F.relu
+
+# When atom_encode=False, uses nn.Linear instead of AtomEncoder/BondEncoder. When edge features are absent, message passing skips them.
 class GINConv(MessagePassing):
     def __init__(self, emb_dim, encode_edge=True, edge_dim=None):
         '''

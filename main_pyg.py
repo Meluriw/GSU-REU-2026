@@ -290,7 +290,6 @@ def config_and_run(args):
             args.l2reg = 1e-5
             args.gamma = 0.7
             args.num_layer = 2
-
         if args.dataset in TU_DATASETS:
             args.gnn = 'gin'
             args.epochs = 200
