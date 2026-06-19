@@ -135,7 +135,12 @@ class GNN_node(torch.nn.Module):
             self.batch_norms.append(torch.nn.BatchNorm1d(emb_dim))
 
     def forward(self, batched_data):
-        x, edge_index, edge_attr, batch = batched_data.x, batched_data.edge_index, batched_data.edge_attr, batched_data.batch
+        # Old line: x, edge_index, edge_attr, batch = batched_data.x, batched_data.edge_index, batched_data.edge_attr, batched_data.batch
+        
+        x = batched_data.x
+        edge_index = batched_data.edge_index
+        batch = batched_data.batch
+        edge_attr = getattr(batched_data, 'edge_attr', None) # Safely defaults to None if missing
 
         ### computing input node embedding
 
@@ -226,7 +231,12 @@ class GNN_node_Virtualnode(torch.nn.Module):
 
     def forward(self, batched_data):
 
-        x, edge_index, edge_attr, batch = batched_data.x, batched_data.edge_index, batched_data.edge_attr, batched_data.batch
+        #  Old Line : x, edge_index, edge_attr, batch = batched_data.x, batched_data.edge_index, batched_data.edge_attr, batched_data.batch
+
+        x = batched_data.x
+        edge_index = batched_data.edge_index
+        batch = batched_data.batch
+        edge_attr = getattr(batched_data, 'edge_attr', None) # Safely defaults to None if missing
 
         ### virtual node embeddings for graphs
         virtualnode_embedding = self.virtualnode_embedding(torch.zeros(batch[-1].item() + 1).to(edge_index.dtype).to(edge_index.device))

@@ -1,4 +1,3 @@
-
 import torch
 import torch.optim as optim
 import torch.nn.functional as F
@@ -11,6 +10,9 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from dataset import PolymerRegDataset, get_tu_dataset, get_mnist_dataset, TU_DATASETS
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
+
+## Clustering/Compression
+from dataset import apply_louvain_clustering
 
 ## training
 from model import GraphEnvAug
@@ -30,7 +32,7 @@ def main(args):
         evaluator = Evaluator(args.dataset)
 
     elif args.dataset.startswith('plym'):
-        dataset = PolymerRegDataset(name = args.dataset.split('-')[1], root='data') # PolymerRegDataset
+        dataset = PolymerRegDataset(name = args.dataset.split('-')[1], root='data', clustering=args.clustering) # PolymerRegDataset
         full_idx = list(range(len(dataset)))
         train_ratio = 0.6
         valid_ratio = 0.1
@@ -58,31 +60,37 @@ def main(args):
 
     elif args.dataset in TU_DATASETS:
         dataset = get_tu_dataset(name=args.dataset, root='data')
+        if args.clustering:
+            args.task_type = dataset.task_type      # save before dataset is overwritten
+            args.num_tasks = dataset.num_tasks      # save before dataset is overwritten
+            dataset = [apply_louvain_clustering(data) for data in dataset]
         full_idx = list(range(len(dataset)))
         train_index, test_index = train_test_split(full_idx, test_size=0.2, random_state=42)
         train_index, val_index = train_test_split(train_index, test_size=0.125, random_state=42)
-        train_loader = DataLoader(dataset[torch.LongTensor(train_index)], batch_size=args.batch_size, shuffle=True, num_workers=0)
-        valid_loader = DataLoader(dataset[torch.LongTensor(val_index)], batch_size=args.batch_size, shuffle=False, num_workers=0)
-        test_loader = DataLoader(dataset[torch.LongTensor(test_index)], batch_size=args.batch_size, shuffle=False, num_workers=0)
+        train_loader = DataLoader(dataset[torch.LongTensor(train_index)] if not args.clustering else [dataset[i] for i in train_index], batch_size=args.batch_size, shuffle=True, num_workers=0)
+        valid_loader = DataLoader(dataset[torch.LongTensor(val_index)] if not args.clustering else [dataset[i] for i in val_index], batch_size=args.batch_size, shuffle=False, num_workers=0)
+        test_loader = DataLoader(dataset[torch.LongTensor(test_index)] if not args.clustering else [dataset[i] for i in test_index], batch_size=args.batch_size, shuffle=False, num_workers=0)
         evaluator = None
-
+        
     else:
         raise ValueError(f'Unknown dataset: {args.dataset}')
 
     n_train_data, n_val_data, n_test_data = len(train_loader.dataset), len(valid_loader.dataset), float(len(test_loader.dataset))
     print(f"# Train: {n_train_data}  #Test: {n_test_data} #Val: {n_val_data}")
 
-    args.task_type = dataset.task_type
+    args.task_type = dataset.task_type if not isinstance(dataset, list) else args.task_type
 
     # Detect node/edge feature dimensions for non-molecular datasets
-    atom_encode = args.dataset.startswith('ogbg') or args.dataset.startswith('plym')
+    is_chemical_dataset = args.dataset.startswith('ogbg') or args.dataset.startswith('plym')
+    atom_encode = is_chemical_dataset and not args.clustering
     node_dim, edge_dim = None, None
     if not atom_encode:
         sample = next(iter(train_loader))
         node_dim = sample.x.size(-1)
         edge_dim = sample.edge_attr.size(-1) if sample.edge_attr is not None else None
 
-    model = GraphEnvAug(gnn_type = args.gnn, num_tasks = dataset.num_tasks, num_layer = args.num_layer,
+    num_tasks = dataset.num_tasks if not isinstance(dataset, list) else args.num_tasks
+    model = GraphEnvAug(gnn_type = args.gnn, num_tasks = num_tasks, num_layer = args.num_layer,
                          emb_dim = args.emb_dim, drop_ratio = args.drop_ratio, gamma=args.gamma, use_linear_predictor = args.use_linear_predictor,
                          atom_encode=atom_encode, node_dim=node_dim, edge_dim=edge_dim).to(device)
     init_weights(model, args.initw_name, init_gain=0.02)
@@ -105,7 +113,8 @@ def main(args):
         elif path in list(range(int(args.path_list[0]), int(args.path_list[1]))):
             optimizer_name = 'predictor'
 
-        train(args, model, device, train_loader, optimizers, dataset.task_type, optimizer_name)
+        task_type = dataset.task_type if not isinstance(dataset, list) else args.task_type
+        train(args, model, device, train_loader, optimizers, task_type, optimizer_name)
 
         if schedulers != None:
             schedulers[optimizer_name].step()
@@ -113,9 +122,10 @@ def main(args):
         valid_perf = eval(args, model, device, valid_loader, evaluator)[0]
         update_test = False
         if epoch != 0:
-            if 'classification' in dataset.task_type and valid_perf >  best_valid_perf:
+            task_type = dataset.task_type if not isinstance(dataset, list) else args.task_type
+            if 'classification' in task_type and valid_perf >  best_valid_perf:
                 update_test = True
-            elif 'classification' not in dataset.task_type and valid_perf <  best_valid_perf:
+            elif 'classification' not in task_type and valid_perf <  best_valid_perf:
                 update_test = True
         if update_test or epoch == 0:
             best_valid_perf = valid_perf

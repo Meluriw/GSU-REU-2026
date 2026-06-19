@@ -19,6 +19,8 @@ def get_args():
                         help='Use Linear predictor')
     parser.add_argument('--gamma', type=float, default=0.4,
                         help='size ratio to regularize the rationale subgraph (default: 0.4)')
+    parser.add_argument('--clustering', default=False, action='store_true',
+                        help='Use clustered super nodes (switches AtomEncoder to a Linear layer)')
 
     # training
     parser.add_argument('--batch_size', type=int, default=256,
