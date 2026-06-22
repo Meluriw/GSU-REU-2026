@@ -155,8 +155,8 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
             pyg_graph_list.append(g)
 
         return pyg_graph_list
-    
-TU_DATASETS = ['MUTAG', 'PROTEINS', 'NCI1', 'IMDB-BINARY', 'IMDB-MULTI', 'REDDIT-BINARY', 'COLLAB']
+
+TU_DATASETS = ['MUTAG', 'PROTEINS', 'NCI1', 'IMDB-BINARY', 'IMDB-MULTI', 'REDDIT-BINARY', 'REDDIT-MULTI-5K', 'REDDIT-MULTI-12K', 'COLLAB', 'DD', 'GITHUB_STARGAZERS']
 
 class _DegreeFeatures:
     def __init__(self, max_degree):
@@ -199,7 +199,7 @@ def apply_louvain_clustering(data):
     if getattr(data, 'x', None) is not None:
         x = data.x.numpy()
     else:
-        # Featureless graphs (like IMDB-BINARY) get a baseline weight of 1
+        # Featureless graphs (like IMDB-BINARY) get a baseline weight of 1 (dummy weights)
         x = np.ones((data.num_nodes, 1), dtype=np.float32)
         
     edge_index = data.edge_index.numpy()
@@ -217,13 +217,21 @@ def apply_louvain_clustering(data):
     unique_comms = sorted(list(set(partition.values())))
     comm_to_idx = {comm_id: i for i, comm_id in enumerate(unique_comms)}
 
-    # 4. Feature Aggregation 
+    # 4. Feature Aggregation
+    # Options: 'mean' or 'sum' — switch by commenting/uncommenting below
     num_supernodes = len(unique_comms)
     supernode_features = np.zeros((num_supernodes, x.shape[1]), dtype=np.float32)
+    cluster_sizes = np.zeros(num_supernodes, dtype=np.float32)
 
     for original_node, comm_id in partition.items():
         new_idx = comm_to_idx[comm_id]
         supernode_features[new_idx] += x[original_node]
+        cluster_sizes[new_idx] += 1
+
+    # --- Mean pooling (active) ---
+    supernode_features /= cluster_sizes[:, None]
+    # --- Sum pooling (uncomment to switch back) ---
+    # pass
 
     # 5. Extracting edge features for the compressed graph (Safe Topological Rewiring)
     new_edges = set()

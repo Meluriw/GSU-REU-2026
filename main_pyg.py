@@ -11,10 +11,10 @@ from sklearn.model_selection import train_test_split
 from dataset import PolymerRegDataset, get_tu_dataset, get_mnist_dataset, TU_DATASETS
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
-## Clustering/Compression
+# Clustering/Compression
 from dataset import apply_louvain_clustering
 
-## training
+# training
 from model import GraphEnvAug
 from utils import init_weights, get_args, train, eval
 

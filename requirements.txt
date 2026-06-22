@@ -28,3 +28,4 @@ scikit-learn==1.0.2 # used in two places:
 # utils.py
 #r2_score(y_true, y_pred)          # computing R² metric during eval
 networkx==2.6.3 #added for k-core function in utils.py
+python-louvain==0.16 # import community as community_louvain — Louvain clustering in dataset.py
