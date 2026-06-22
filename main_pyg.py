@@ -18,6 +18,9 @@ from dataset import apply_louvain_clustering
 from model import GraphEnvAug
 from utils import init_weights, get_args, train, eval
 
+# Timing functionality
+import time
+
 
 def main(args):
     print(args)
@@ -105,6 +108,7 @@ def main(args):
         schedulers = None
     cnt_wait = 0
     best_epoch = 0
+    total_train_time = 0.0
     for epoch in range(args.epochs):
         print("=====Epoch {}".format(epoch))
         path = epoch % int(args.path_list[-1])
@@ -114,7 +118,10 @@ def main(args):
             optimizer_name = 'predictor'
 
         task_type = dataset.task_type if not isinstance(dataset, list) else args.task_type
+
+        start_train_time = time.time()
         train(args, model, device, train_loader, optimizers, task_type, optimizer_name)
+        total_train_time += (time.time() - start_train_time)
 
         if schedulers != None:
             schedulers[optimizer_name].step()
@@ -147,15 +154,16 @@ def main(args):
             if cnt_wait > args.patience:
                 break
     print('Finished training! Results from epoch {} with best validation {}.'.format(best_epoch, best_valid_perf))
+    print(f'Total Training Time (excluding evaluation): {total_train_time:.2f} seconds\n')
     if args.dataset.startswith('ogbg'):
         print('Test auc: {}'.format(test_auc))
-        return [best_valid_perf, test_auc]
+        return [best_valid_perf, test_auc, total_train_time]
     elif args.dataset.startswith('plym'):
         print('Test rmse: {}, Test r2: {} \n'.format(test_rmse, test_r2))
-        return [best_valid_perf, test_rmse, test_r2]
+        return [best_valid_perf, test_rmse, test_r2, total_train_time]
     else:
         print('Test accuracy: {}'.format(test_acc))
-        return [best_valid_perf, test_acc]
+        return [best_valid_perf, test_acc, total_train_time]
 
 def config_and_run(args):
     
@@ -320,28 +328,37 @@ def config_and_run(args):
         args.plym_prop = 'none'
 
     if args.dataset.startswith('ogbg'):
-        results = {'valid_auc': [], 'test_auc': []}
+        results = {'valid_auc': [], 'test_auc': [], 'train_time': []}
     elif args.dataset.startswith('plym'):
-        results = {'valid_rmse': [], 'test_rmse': [], 'test_r2':[]}
+        results = {'valid_rmse': [], 'test_rmse': [], 'test_r2':[], 'train_time': []}
     else:
-        results = {'valid_acc': [], 'test_acc': []}
+        results = {'valid_acc': [], 'test_acc': [], 'train_time': []}
     for _ in range(args.trails):
         if args.dataset.startswith('plym'):
-            valid_rmse, test_rmse, test_r2 = main(args)
+            valid_rmse, test_rmse, test_r2, train_time = main(args)
             results['test_r2'].append(test_r2)
             results['test_rmse'].append(test_rmse)
             results['valid_rmse'].append(valid_rmse)
+            results['train_time'].append(train_time)
         elif args.dataset.startswith('ogbg'):
-            valid_auc, test_auc = main(args)
+            valid_auc, test_auc, train_time = main(args)
             results['valid_auc'].append(valid_auc)
             results['test_auc'].append(test_auc)
+            results['train_time'].append(train_time)
         else:
-            valid_acc, test_acc = main(args)
+            valid_acc, test_acc, train_time = main(args)
             results['valid_acc'].append(valid_acc)
             results['test_acc'].append(test_acc)
+            results['train_time'].append(train_time)
+    
+    print("\n" + "="*40)
+    print("FINAL EXECUTION RESULTS (Averaged over trails)")
+    print("="*40)
+    
     for mode, nums in results.items():
         print('{}: {:.4f}+-{:.4f} {}'.format(
             mode, np.mean(nums), np.std(nums), nums))
+    print("="*40 + "\n")
 
 if __name__ == "__main__":
     args = get_args()
