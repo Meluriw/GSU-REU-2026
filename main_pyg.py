@@ -12,7 +12,7 @@ from dataset import PolymerRegDataset, get_tu_dataset, get_mnist_dataset, TU_DAT
 from ogb.graphproppred import PygGraphPropPredDataset, Evaluator
 
 # Clustering/Compression
-from dataset import apply_louvain_clustering
+from dataset import apply_graph_compression
 
 # training
 from model import GraphEnvAug
@@ -35,7 +35,12 @@ def main(args):
         evaluator = Evaluator(args.dataset)
 
     elif args.dataset.startswith('plym'):
-        dataset = PolymerRegDataset(name = args.dataset.split('-')[1], root='data', clustering=args.clustering) # PolymerRegDataset
+        dataset = PolymerRegDataset(
+            name=args.dataset.split('-')[1], 
+            root='data', 
+            compression_method=args.compression_method,
+            k_core_k=args.k_core_k
+        ) # PolymerRegDataset
         full_idx = list(range(len(dataset)))
         train_ratio = 0.6
         valid_ratio = 0.1
@@ -63,16 +68,16 @@ def main(args):
 
     elif args.dataset in TU_DATASETS:
         dataset = get_tu_dataset(name=args.dataset, root='data')
-        if args.clustering:
-            args.task_type = dataset.task_type      # save before dataset is overwritten
-            args.num_tasks = dataset.num_tasks      # save before dataset is overwritten
-            dataset = [apply_louvain_clustering(data) for data in dataset]
+        if args.compression_method != 'none':
+            args.task_type = dataset.task_type      
+            args.num_tasks = dataset.num_tasks      
+            dataset = [apply_graph_compression(data, method=args.compression_method, k=args.k_core_k) for data in dataset]
         full_idx = list(range(len(dataset)))
         train_index, test_index = train_test_split(full_idx, test_size=0.2, random_state=42)
         train_index, val_index = train_test_split(train_index, test_size=0.125, random_state=42)
-        train_loader = DataLoader(dataset[torch.LongTensor(train_index)] if not args.clustering else [dataset[i] for i in train_index], batch_size=args.batch_size, shuffle=True, num_workers=0)
-        valid_loader = DataLoader(dataset[torch.LongTensor(val_index)] if not args.clustering else [dataset[i] for i in val_index], batch_size=args.batch_size, shuffle=False, num_workers=0)
-        test_loader = DataLoader(dataset[torch.LongTensor(test_index)] if not args.clustering else [dataset[i] for i in test_index], batch_size=args.batch_size, shuffle=False, num_workers=0)
+        train_loader = DataLoader(dataset[torch.LongTensor(train_index)] if args.compression_method == 'none' else [dataset[i] for i in train_index], batch_size=args.batch_size, shuffle=True, num_workers=0)
+        valid_loader = DataLoader(dataset[torch.LongTensor(val_index)] if args.compression_method == 'none' else [dataset[i] for i in val_index], batch_size=args.batch_size, shuffle=False, num_workers=0)
+        test_loader = DataLoader(dataset[torch.LongTensor(test_index)] if args.compression_method == 'none' else [dataset[i] for i in test_index], batch_size=args.batch_size, shuffle=False, num_workers=0)
         evaluator = None
         
     else:
@@ -85,7 +90,7 @@ def main(args):
 
     # Detect node/edge feature dimensions for non-molecular datasets
     is_chemical_dataset = args.dataset.startswith('ogbg') or args.dataset.startswith('plym')
-    atom_encode = is_chemical_dataset and not args.clustering
+    atom_encode = is_chemical_dataset and args.compression_method in ['none', 'k-core']
     node_dim, edge_dim = None, None
     if not atom_encode:
         sample = next(iter(train_loader))
@@ -354,7 +359,7 @@ def config_and_run(args):
     print("\n" + "="*40)
     print("FINAL EXECUTION RESULTS (Averaged over trails)")
     print("="*40)
-    
+
     for mode, nums in results.items():
         print('{}: {:.4f}+-{:.4f} {}'.format(
             mode, np.mean(nums), np.std(nums), nums))

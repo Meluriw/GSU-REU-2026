@@ -16,45 +16,47 @@ import networkx as nx #added
 import community as community_louvain #added
 
 
-class apply_k_core(): #added (but will we use this?) Simple clustering ? Graph clustering models we need to implement (Example : lovine, metis ) or use l core for clustreing ? after this, find the "best subgraphs" and then use those subgraphs for learning 
+# class apply_k_core(): #added (but will we use this?) Simple clustering ? Graph clustering models we need to implement (Example : lovine, metis ) or use l core for clustreing ? after this, find the "best subgraphs" and then use those subgraphs for learning 
 
-  def k_core_reduction(edge_index, num_nodes, k): # Translates PyTorch into NetworkX (remove hardcoded k=2)
-    G = nx.Graph()
-    G.add_nodes_from(range(num_nodes))
-    # edge_index is [2, num_edges] COO format
-    G.add_edges_from(edge_index.T.tolist())
+#   def k_core_reduction(edge_index, num_nodes, k): # Translates PyTorch into NetworkX (remove hardcoded k=2)
+#     G = nx.Graph()
+#     G.add_nodes_from(range(num_nodes))
+#     # edge_index is [2, num_edges] COO format
+#     G.add_edges_from(edge_index.T.tolist())
     
-    core = nx.k_core(G, k=k) #yay # this line finds any node with fewer than k connections
-    kept_nodes = sorted(core.nodes()) # removing those nodes changes the connection count of their neighbors, it checks everyone again (more might have to be deleted)
+#     core = nx.k_core(G, k=k) #yay # this line finds any node with fewer than k connections
+#     kept_nodes = sorted(core.nodes()) # removing those nodes changes the connection count of their neighbors, it checks everyone again (more might have to be deleted)
 
-    # fallback if reduction empties the graph
-    if len(kept_nodes) == 0: # Safety Net
-        return list(range(num_nodes)), edge_index, {i: i for i in range(num_nodes)}
+#     # fallback if reduction empties the graph
+#     if len(kept_nodes) == 0: # Safety Net
+#         return list(range(num_nodes)), edge_index, {i: i for i in range(num_nodes)}
     
-    node_map = {old: new for new, old in enumerate(kept_nodes)} # When we delete nodes, we create gaps in your indexing, we can't pass that to a PyTorch tensor because tensors expect sequential indices starting at 0
-    kept_set = set(kept_nodes) 
+#     node_map = {old: new for new, old in enumerate(kept_nodes)} # When we delete nodes, we create gaps in your indexing, we can't pass that to a PyTorch tensor because tensors expect sequential indices starting at 0
+#     kept_set = set(kept_nodes) 
     
-    new_edges = [
-        [node_map[u], node_map[v]]
-        for u, v in edge_index.T
-        if u in kept_set and v in kept_set
-    ]
-    new_edge_index = np.array(new_edges, dtype=np.int64).T if new_edges else np.empty((2,0), dtype=np.int64)
+#     new_edges = [
+#         [node_map[u], node_map[v]]
+#         for u, v in edge_index.T
+#         if u in kept_set and v in kept_set
+#     ]
+#     new_edge_index = np.array(new_edges, dtype=np.int64).T if new_edges else np.empty((2,0), dtype=np.int64)
     
-    return kept_nodes, new_edge_index, node_map
+#     return kept_nodes, new_edge_index, node_map
+
 # SMILES stands for Simplified Molecular Input Line Entry System — it's basically a way to write a 3D molecule as a simple text string.
 # [H]   = hydrogen
 # *     = polymer end point (where chain continues)
 # C(C)  = carbon with a branch to another carbon
 # =     = double bond
 class PolymerRegDataset(InMemoryDataset): # this class is a data preparation class that reads CSV file and converts each row into a graph that the GNN can understand.
-    def __init__(self, name='o2_prop', root ='data', transform=None, pre_transform = None, clustering = False):
+    def __init__(self, name='o2_prop', root ='data', transform=None, pre_transform = None, compression_method = 'none', k_core_k = 2):
         '''
             - name (str): name of the dataset
             - root (str): root directory to store the dataset folder
             - transform, pre_transform (optional): transform/pre-transform graph objects
         ''' 
-        self.clustering = clustering
+        self.compression_method = compression_method
+        self.k_core_k = k_core_k
         self.name = name
         self.dir_name = '_'.join(name.split('-'))
         root = osp.join(root,name,'raw')
@@ -67,8 +69,8 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
         self.__num_classes__ = '-1'
         self.binary = 'False'
 
-        if clustering and pre_transform is None:
-            pre_transform = apply_louvain_clustering
+        if compression_method != 'none' and pre_transform is None:
+            pre_transform = lambda data: apply_graph_compression(data, method=self.compression_method, k=self.k_core_k)
 
         super(PolymerRegDataset, self).__init__(self.processed_root, transform, pre_transform) # calls the parent class (InMemoryDataset) __init__ — this triggers PyG to either load the cached processed file if it exists, or call process() to build it from scratch.
 
@@ -76,8 +78,8 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
         self.data, self.slices = torch.load(self.processed_paths[0])
     @property
     def processed_file_names(self): # output
-        if self.clustering:
-            return 'geometric_data_processed_clustered.pt'
+        if self.compression_method != 'none':
+            return f'geometric_data_processed_{self.compression_method}.pt'
         else:
             return 'geometric_data_processed_atomic.pt'
 
@@ -114,7 +116,7 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
             print(df_full[:5])
         graph_list = []
         for i, smiles_idx in enumerate(df_full.index):
-            graph_dict = smiles2graph(smiles_idx, clustering=self.clustering)
+            graph_dict = smiles2graph(smiles_idx, compression_method=self.compression_method, k_core_k=self.k_core_k)
             props = df_full.loc[smiles_idx]
             for (name,value) in props.items(): # added line (iteritems() is deprecated in pandas 1.5.0, so we use items() instead)
                 graph_dict[name] = np.array([[value]])
@@ -129,7 +131,7 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
         print(type(graph_list))
         for graph in tqdm(graph_list):
             g = Data()
-            g.__num_nodes__ = graph['num_nodes']
+            g.num_nodes = graph['num_nodes']
             g.edge_index = torch.from_numpy(graph['edge_index'])
 
             del graph['num_nodes']
@@ -194,77 +196,144 @@ def get_mnist_dataset(root='data'):
     dataset.num_tasks = 10
     return dataset, train_dataset, test_dataset
 
-def apply_louvain_clustering(data):
-    # 1. Handle Features vs Featureless
-    if getattr(data, 'x', None) is not None:
-        x = data.x.numpy()
-    else:
-        # Featureless graphs (like IMDB-BINARY) get a baseline weight of 1 (dummy weights)
-        x = np.ones((data.num_nodes, 1), dtype=np.float32)
-        
-    edge_index = data.edge_index.numpy()
-    
-    # 2. Build Base NetworkX Graph
-    G = nx.Graph()
-    G.add_nodes_from(range(data.num_nodes))
-    if edge_index.size > 0:
-        G.add_edges_from(zip(edge_index[0], edge_index[1]))
+def apply_graph_compression (data, method = 'louvain', k = 2):
 
-    # 3. Run Louvain Clustering
-    partition = community_louvain.best_partition(G)
+    if method == 'louvain':
 
-    # Grouping nodes into communities and mapping safely to 0, 1, 2...
-    unique_comms = sorted(list(set(partition.values())))
-    comm_to_idx = {comm_id: i for i, comm_id in enumerate(unique_comms)}
-
-    # 4. Feature Aggregation
-    # Options: 'mean' or 'sum' — switch by commenting/uncommenting below
-    num_supernodes = len(unique_comms)
-    supernode_features = np.zeros((num_supernodes, x.shape[1]), dtype=np.float32)
-    cluster_sizes = np.zeros(num_supernodes, dtype=np.float32)
-
-    for original_node, comm_id in partition.items():
-        new_idx = comm_to_idx[comm_id]
-        supernode_features[new_idx] += x[original_node]
-        cluster_sizes[new_idx] += 1
-
-    # --- Mean pooling (active) ---
-    supernode_features /= cluster_sizes[:, None]
-    # --- Sum pooling (uncomment to switch back) ---
-    # pass
-
-    # 5. Extracting edge features for the compressed graph (Safe Topological Rewiring)
-    new_edges = set()
-    if edge_index.size > 0:
-        for i in range(edge_index.shape[1]):
-            u = edge_index[0, i]
-            v = edge_index[1, i]
+        # 1. Handle Features vs Featureless
+        if getattr(data, 'x', None) is not None:
+            x = data.x.numpy()
+        else:
+            # Featureless graphs (like IMDB-BINARY) get a baseline weight of 1 (dummy weights)
+            x = np.ones((data.num_nodes, 1), dtype=np.float32)
             
-            su = comm_to_idx[partition[u]]
-            sv = comm_to_idx[partition[v]]
-            
-            # Avoid self-loops
-            if su != sv:
-                new_edges.add((su, sv))
-                new_edges.add((sv, su))
-
-    if len(new_edges) > 0:
-        new_edge_index = np.array(list(new_edges), dtype=np.int64).T
-    else:
-        new_edge_index = np.empty((2, 0), dtype=np.int64)
-
-    # 6. Overwrite the PyG Data object
-    data.x = torch.from_numpy(supernode_features)
-    data.edge_index = torch.from_numpy(new_edge_index)
-    data.num_nodes = num_supernodes
-    
-    # Drop edge features if they exist (crucial for OGB and Polymers so it doesn't crash)
-    if hasattr(data, 'edge_attr'):
-        data.edge_attr = None 
+        edge_index = data.edge_index.numpy()
         
-    return data
+        # 2. Build Base NetworkX Graph
+        G = nx.Graph()
+        G.add_nodes_from(range(data.num_nodes))
+        if edge_index.size > 0:
+            G.add_edges_from(zip(edge_index[0], edge_index[1]))
 
-def smiles2graph(smiles_string, clustering=False): # Only for SMILES
+        # 3. Run Louvain Clustering
+        partition = community_louvain.best_partition(G)
+
+        # Grouping nodes into communities and mapping safely to 0, 1, 2...
+        unique_comms = sorted(list(set(partition.values())))
+        comm_to_idx = {comm_id: i for i, comm_id in enumerate(unique_comms)}
+
+        # 4. Feature Aggregation
+        # Options: 'mean' or 'sum' — switch by commenting/uncommenting below
+        num_supernodes = len(unique_comms)
+        supernode_features = np.zeros((num_supernodes, x.shape[1]), dtype=np.float32)
+        cluster_sizes = np.zeros(num_supernodes, dtype=np.float32)
+
+        for original_node, comm_id in partition.items():
+            new_idx = comm_to_idx[comm_id]
+            supernode_features[new_idx] += x[original_node]
+            cluster_sizes[new_idx] += 1
+
+        # --- Mean pooling (active) ---
+        supernode_features /= cluster_sizes[:, None]
+        # --- Sum pooling (uncomment to switch back) ---
+        # pass
+
+        # 5. Extracting edge features for the compressed graph (Safe Topological Rewiring)
+        new_edges = set()
+        if edge_index.size > 0:
+            for i in range(edge_index.shape[1]):
+                u = edge_index[0, i]
+                v = edge_index[1, i]
+                
+                su = comm_to_idx[partition[u]]
+                sv = comm_to_idx[partition[v]]
+                
+                # Avoid self-loops
+                if su != sv:
+                    new_edges.add((su, sv))
+                    new_edges.add((sv, su))
+
+        if len(new_edges) > 0:
+            new_edge_index = np.array(list(new_edges), dtype=np.int64).T
+        else:
+            new_edge_index = np.empty((2, 0), dtype=np.int64)
+
+        # 6. Overwrite the PyG Data object
+        data.x = torch.from_numpy(supernode_features)
+        data.edge_index = torch.from_numpy(new_edge_index)
+        data.num_nodes = num_supernodes
+        
+        # Drop edge features if they exist (crucial for OGB and Polymers so it doesn't crash)
+        if hasattr(data, 'edge_attr'):
+            data.edge_attr = None 
+            
+        return data
+    
+    elif method == 'k-core':
+
+        # 1. Handle Features vs Featureless
+        if getattr(data, 'x', None) is not None:
+            x = data.x.numpy()
+        else:
+            x = None
+        
+        edge_index = data.edge_index.numpy()
+        num_nodes = data.num_nodes
+
+        # 2. Build Base NetworkX Graph
+        G = nx.Graph()
+        G.add_nodes_from (range(num_nodes))
+        if edge_index.size > 0:
+
+            G.add_edges_from(zip(edge_index[0], edge_index[1]))
+        
+        # 3. Run k-core clustering
+        core = nx.k_core (G, k=k)
+        kept_nodes = sorted(core.nodes())
+
+        # fallback if reduction empties the graph
+        if len(kept_nodes) == 0:
+            print(f"[!] Safety Net: Graph of size {num_nodes} completely deleted at k={k}. Returning original.")
+            if hasattr(data, 'edge_attr'):
+                data.edge_attr = None
+            return data
+        
+        # 4. Create new edge_index and node features
+        node_map = {old: new for new, old in enumerate (kept_nodes)}
+        kept_set = set (kept_nodes)
+
+        #5. Extracting edge features for the compressed graph (Safe Topological Rewiring)
+        new_edges = []
+        if edge_index.size > 0:
+            for i in range(edge_index.shape[1]):
+                u = edge_index[0, i]
+                v = edge_index[1, i]
+
+                if u in kept_set and v in kept_set:
+                    new_edges.append ([node_map[u], node_map[v]])
+        
+        new_edge_index = np.array (new_edges, dtype = np.int64).T if new_edges else np.empty ((2,0), dtype = np.int64)
+
+        # 6. Overwrite the PyG Data object
+
+        if x is not None:
+            new_x = x[kept_nodes]
+            data.x = torch.from_numpy (new_x)
+
+        data.edge_index = torch.from_numpy (new_edge_index)
+        data.num_nodes = len (kept_nodes)
+
+        if hasattr (data, 'edge_attr'):
+            data.edge_attr = None
+        
+        return data
+    
+    else:
+        # Just return the original graph if no method is applied
+        return data 
+
+
+def smiles2graph(smiles_string, compression_method='none', k_core_k=2): # Only for SMILES
     """
     Converts SMILES string to graph Data object
     :input: SMILES string (str)
@@ -309,7 +378,7 @@ def smiles2graph(smiles_string, clustering=False): # Only for SMILES
         edge_index = np.empty((2, 0), dtype = np.int64)
         edge_attr = np.empty((0, num_bond_features), dtype = np.int64)
  
-    if not clustering:
+    if compression_method == 'none':
         # Return the original graph
         graph = dict()
         graph['edge_index'] = edge_index
@@ -324,7 +393,7 @@ def smiles2graph(smiles_string, clustering=False): # Only for SMILES
     tmp.x = torch.from_numpy(x)
     tmp.edge_index = torch.from_numpy(edge_index)
     tmp.num_nodes = len(x)
-    tmp = apply_louvain_clustering(tmp)
+    tmp = apply_graph_compression(tmp, method=compression_method, k=k_core_k)
  
     graph = dict()
     graph['edge_index'] = tmp.edge_index.numpy()
