@@ -39,7 +39,6 @@ def main(args):
             name=args.dataset.split('-')[1], 
             root='data', 
             compression_method=args.compression_method,
-            k_core_k=args.k_core_k
         ) # PolymerRegDataset
         full_idx = list(range(len(dataset)))
         train_ratio = 0.6
@@ -71,7 +70,7 @@ def main(args):
         if args.compression_method != 'none':
             args.task_type = dataset.task_type      
             args.num_tasks = dataset.num_tasks      
-            dataset = [apply_graph_compression(data, method=args.compression_method, k=args.k_core_k) for data in dataset]
+            dataset = [apply_graph_compression(data, method=args.compression_method) for data in dataset]
         full_idx = list(range(len(dataset)))
         train_index, test_index = train_test_split(full_idx, test_size=0.2, random_state=42)
         train_index, val_index = train_test_split(train_index, test_size=0.125, random_state=42)
@@ -90,7 +89,7 @@ def main(args):
 
     # Detect node/edge feature dimensions for non-molecular datasets
     is_chemical_dataset = args.dataset.startswith('ogbg') or args.dataset.startswith('plym')
-    atom_encode = is_chemical_dataset and args.compression_method in ['none', 'k-core']
+    atom_encode = is_chemical_dataset and args.compression_method == 'none'
     node_dim, edge_dim = None, None
     if not atom_encode:
         sample = next(iter(train_loader))

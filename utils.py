@@ -22,8 +22,6 @@ def get_args():
     parser.add_argument('--compression_method', type=str, default='none',
                         choices=['none', 'louvain', 'k-core'],
                         help='Graph compression method to apply (none, louvain, k-core)') 
-    parser.add_argument('--k_core_k', type=int, default=2,
-                        help='The k threshold for k-core compression (default: 2)')
 
 
     # training
