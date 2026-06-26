@@ -20,8 +20,8 @@ def get_args():
     parser.add_argument('--gamma', type=float, default=0.4,
                         help='size ratio to regularize the rationale subgraph (default: 0.4)')
     parser.add_argument('--compression_method', type=str, default='none',
-                        choices=['none', 'louvain', 'k-core'],
-                        help='Graph compression method to apply (none, louvain, k-core)') 
+                        choices=['none', 'louvain', 'k-core', 'metis'],
+                        help='Graph compression method to apply (none, louvain, k-core, metis)')
 
 
     # training

@@ -14,6 +14,7 @@ import torch
 import copy
 import networkx as nx #added
 import community as community_louvain #added
+import pymetis #added
 
 
 # SMILES stands for Simplified Molecular Input Line Entry System — it's basically a way to write a 3D molecule as a simple text string.
@@ -129,7 +130,7 @@ class PolymerRegDataset(InMemoryDataset): # this class is a data preparation cla
             pyg_graph_list.append(g)
 
         return pyg_graph_list
-
+# we cant use stargazing!
 TU_DATASETS = ['MUTAG', 'PROTEINS', 'NCI1', 'IMDB-BINARY', 'IMDB-MULTI', 'REDDIT-BINARY', 'REDDIT-MULTI-5K', 'REDDIT-MULTI-12K', 'COLLAB', 'DD', 'GITHUB_STARGAZERS']
 
 class _DegreeFeatures:
@@ -142,7 +143,7 @@ class _DegreeFeatures:
         deg = torch.clamp(deg, max=self.max_degree - 1)
         data.x = torch.nn.functional.one_hot(deg, self.max_degree).float()
         return data
-
+# we might benefit from more feautures?
 def get_tu_dataset(name, root='data'):
     dataset = TUDataset(root=root, name=name, use_node_attr=True)
     if dataset.num_node_features == 0:
@@ -334,10 +335,84 @@ def apply_graph_compression (data, method = 'louvain'):
             data.edge_attr = None
  
         return data
-    
+
+    elif method == 'metis':
+
+        # Step 1: Handle Features vs Featureless
+        if getattr(data, 'x', None) is not None:
+            x = data.x.numpy()
+        else:
+            x = np.ones((data.num_nodes, 1), dtype=np.float32)
+
+        edge_index = data.edge_index.numpy()
+        num_nodes = data.num_nodes
+
+        # Step 2: Build adjacency list for pymetis
+        adjacency = [[] for _ in range(num_nodes)]
+        if edge_index.size > 0:
+            for i in range(edge_index.shape[1]):
+                u, v = int(edge_index[0, i]), int(edge_index[1, i])
+                if v not in adjacency[u]:
+                    adjacency[u].append(v)
+
+        # Step 3: Determine number of partitions
+        nparts = max(2, num_nodes // 5)
+
+        # Graphs too small to partition — return as-is
+        if num_nodes < 4 or nparts >= num_nodes:
+            if hasattr(data, 'edge_attr'):
+                data.edge_attr = None
+            return data
+
+        # Step 4: Run METIS partitioning
+        _, membership = pymetis.part_graph(nparts, adjacency=adjacency)
+
+        # Map partition IDs to contiguous 0, 1, 2, ...
+        unique_parts = sorted(set(membership))
+        part_to_idx = {p: i for i, p in enumerate(unique_parts)}
+        node_to_supernode = {n: part_to_idx[membership[n]] for n in range(num_nodes)}
+
+        # Step 5: Aggregate Node Features (mean pool)
+        num_supernodes = len(unique_parts)
+        supernode_features = np.zeros((num_supernodes, x.shape[1]), dtype=np.float32)
+        supernode_counts = np.zeros(num_supernodes, dtype=np.float32)
+
+        for n in range(num_nodes):
+            sn = node_to_supernode[n]
+            supernode_features[sn] += x[n]
+            supernode_counts[sn] += 1
+
+        supernode_features /= supernode_counts[:, None]
+
+        # Step 6: Build Supernode Edge Index
+        new_edges = set()
+        if edge_index.size > 0:
+            for i in range(edge_index.shape[1]):
+                u, v = int(edge_index[0, i]), int(edge_index[1, i])
+                su = node_to_supernode[u]
+                sv = node_to_supernode[v]
+                if su != sv:
+                    new_edges.add((su, sv))
+                    new_edges.add((sv, su))
+
+        if new_edges:
+            new_edge_index = np.array(list(new_edges), dtype=np.int64).T
+        else:
+            new_edge_index = np.empty((2, 0), dtype=np.int64)
+
+        # Step 7: Overwrite PyG Data Object
+        data.x = torch.from_numpy(supernode_features)
+        data.edge_index = torch.from_numpy(new_edge_index)
+        data.num_nodes = num_supernodes
+
+        if hasattr(data, 'edge_attr'):
+            data.edge_attr = None
+
+        return data
+
     else:
-    
-        return data 
+
+        return data
 
 
 def smiles2graph(smiles_string, compression_method='none'): # Only for SMILES
