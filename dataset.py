@@ -243,97 +243,102 @@ def apply_graph_compression (data, method = 'louvain'):
         return data
     
     elif method == 'k-core':
- 
-        # Step 1: Handle Features vs Featureless
-    
+
+        # ── Step 1: Handle Features vs Featureless ──────────────────────────────
         has_features = getattr(data, 'x', None) is not None
         if has_features:
             x = data.x.numpy()          # shape: [num_nodes, feat_dim]
         else:
             x = np.ones((data.num_nodes, 1), dtype=np.float32)  # dummy feature
- 
+
         edge_index = data.edge_index.numpy()   # shape: [2, num_edges]
         num_nodes  = data.num_nodes
- 
-        # Step 2: Build NetworkX Graph
-        
+
+        # ── Step 2: Build NetworkX Graph ────────────────────────────────────────
         G = nx.Graph()
         G.add_nodes_from(range(num_nodes))
         if edge_index.size > 0:
             G.add_edges_from(zip(edge_index[0], edge_index[1]))
- 
-        # Step 3: K-Shell Decomposition via core_number 
 
-        coreness = nx.core_number(G)      
- 
-        # Group nodes by their shell level (coreness value).
-        # Each unique coreness level becomes one supernode.
-
-        shell_levels = sorted(set(coreness.values()))  # e.g. [1, 2, 3]
- 
-        # Safety net: if every node ends up in a single shell (fully uniform graph), 
-        # there is nothing to compress — return the original.
+        # ── Step 3: K-Shell Decomposition + Spatial Separation ──────────────────
+        # Get the highest k-core level each node survives in.
+        coreness = nx.core_number(G)          # {node_id: coreness_level}
         
-        if len(shell_levels) <= 1:
-            print(f"[!] K-Core: Graph of size {num_nodes} has only one shell level "
-                  f"(coreness={shell_levels}). Returning original.")
+        node_to_supernode = {}
+        supernode_id = 0
+        
+        # Find unique k-shell levels (e.g., [1, 2, 3])
+        shell_levels = sorted(set(coreness.values()))
+        
+        for k in shell_levels:
+            # Get all nodes that belong to this specific k-shell
+            nodes_in_k = [n for n, c in coreness.items() if c == k]
+            
+            # Create a subgraph of ONLY the nodes in this shell level
+            subgraph_k = G.subgraph(nodes_in_k)
+            
+            # Find continuous communities/components within this shell / prevent merging disconnected parts into one supernode
+            components = list(nx.connected_components(subgraph_k))
+            
+            for comp in components:
+                for node in comp:
+                    node_to_supernode[node] = supernode_id
+                supernode_id += 1
+                
+        num_supernodes = supernode_id
+        
+        # Safety net: if no meaningful compression happened (e.g. every node 
+        # became its own supernode, or the whole graph became 1 uniform node).
+        if num_supernodes == num_nodes or num_supernodes <= 1:
+            # print(f"[!] K-Core: Graph resulted in {num_supernodes} supernodes from {num_nodes} original nodes. Returning original.")
+
+            data.num_nodes = num_nodes
+
             if hasattr(data, 'edge_attr'):
                 data.edge_attr = None
             return data
- 
-        # Map each shell level to a supernode index 0, 1, 2, …
 
-        level_to_supernode = {lvl: idx for idx, lvl in enumerate(shell_levels)}
-
-        # Map each original node → its supernode index
-
-        node_to_supernode  = {n: level_to_supernode[coreness[n]] for n in range(num_nodes)}
- 
-        # Step 4: Aggregate Node Features into Supernodes (mean pool) 
-       
-        num_supernodes   = len(shell_levels)
-        feat_dim         = x.shape[1]
+        # ── Step 4: Aggregate Node Features into Supernodes (mean pool) ─────────
+        feat_dim           = x.shape[1]
         supernode_features = np.zeros((num_supernodes, feat_dim), dtype=np.float32)
         supernode_counts   = np.zeros(num_supernodes, dtype=np.float32)
- 
+
         for orig_node in range(num_nodes):
             sn_idx = node_to_supernode[orig_node]
             supernode_features[sn_idx] += x[orig_node]
             supernode_counts[sn_idx]   += 1
- 
-        # Mean pool: divide each supernode's accumulated features by its size.
-        # supernode_counts is always ≥ 1 here (every node belongs to a shell).
 
+        # Mean pool: divide each supernode's accumulated features by its size (comment out to switch to sum pooling).
         supernode_features /= supernode_counts[:, None]
- 
-        # Step 5: Build Supernode Edge Index
 
-        new_edges: set = set()
+        # ── Step 5: Build Supernode Edge Index ──────────────────────────────────
+        # Draw edges between supernodes if any of their original constituent nodes
+        # were connected in the original graph.
+        new_edges = set()
         if edge_index.size > 0:
             for i in range(edge_index.shape[1]):
                 u, v = int(edge_index[0, i]), int(edge_index[1, i])
                 su   = node_to_supernode[u]
                 sv   = node_to_supernode[v]
-                if su != sv:                  # skip within-shell edges (self-loops)
+                if su != sv:                  # skip within-supernode edges (self-loops)
                     new_edges.add((su, sv))
                     new_edges.add((sv, su))   # keep graph undirected
- 
+
         if new_edges:
             new_edge_index = np.array(list(new_edges), dtype=np.int64).T
         else:
             new_edge_index = np.empty((2, 0), dtype=np.int64)
- 
-        # Step 6: Overwrite PyG Data Object
-    
+
+        # ── Step 6: Overwrite PyG Data Object ───────────────────────────────────
         data.x          = torch.from_numpy(supernode_features)
         data.edge_index = torch.from_numpy(new_edge_index)
         data.num_nodes  = num_supernodes
- 
-        # Drop edge features
 
+        # Drop edge features: they are per-original-edge and no longer
+        # map cleanly to the compressed supernode graph.
         if hasattr(data, 'edge_attr'):
             data.edge_attr = None
- 
+
         return data
 
     elif method == 'metis':
